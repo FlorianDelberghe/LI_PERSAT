@@ -1,0 +1,13 @@
+# Folders
+.*/
+data/*
+papers/
+code/__pycache__
+
+# File types
+*.png
+*.tif
+*.pkl
+*.h5
+
+# Files
