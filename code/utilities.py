@@ -1,6 +1,7 @@
 import os
 import sys
 import pickle
+import glob
 
 import numpy as np
 import skimage.external.tifffile as tifffile
@@ -26,9 +27,7 @@ def progress_bar(pos, total, length=50, newline=True):
 def load_img_path(folder_path, file_type='.tif'):
     """Returns the filepaths of the images in the given folder"""
 
-    imgs_paths = [os.path.join(folder_path, filename) 
-                  for filename in os.listdir(folder_path) if filename.endswith(file_type)]
-    return imgs_paths
+    return glob.glob("{}*{}".format(folder_path, file_type))
 
 
 def load_imgs(imgs_paths):

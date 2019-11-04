@@ -9,5 +9,7 @@ code/__pycache__
 *.tif
 *.pkl
 *.h5
+*.gif
+*.log
 
 # Files

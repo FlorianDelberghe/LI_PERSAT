@@ -19,8 +19,51 @@ from  code.utilities import progress_bar, save_stack
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 
-def median_image(stack, method=None, sample_size=100, niter=100, progress=True):
-    """Computes the median of a stack of images (return dtype=np.int16)"""
+def structural_element(shape, size):
+    """Build a 3D structural element to be used for morphological operations
+        PARAMS:
+            shape (str): shape of the structural element support 'square', 'circle', 'cross', diamond'
+            size (tuple): size in the 3 dimensions of the element
+        RETURNS:
+            element (np.array): structural element"""
+
+    if shape == 'square':
+        element = np.ones(size[1:])
+        
+    elif shape == 'cross':
+        element = np.zeros(size[1:])
+        element[size[1] //2, :] = 1
+        element[:, size[2] //2] = 1
+        
+    elif shape == 'circle':
+        element = np.zeros(size[1:])
+        for i in range(size[1]):
+            for j in range(size[2]):
+                if (i -size[1] //2) **2 + (j -size[2] //2)**2 <= (size[1] //2) **2:
+                    element[i, j] = 1
+                    
+    elif shape == 'diamond':
+        element = np.zeros(size[1:])
+        for i in range(size[1]):
+            for j in range(size[2]):
+                if ((i+1 -size[1] //2)  + (j+1 -size[2] //2)) < size[1] //2 :
+                    element[i, j] = 1
+
+    return np.stack([element] *size[0], axis=0)
+
+
+def median_image(stack, method=None, sample_size=100, niter=100, progress=False):
+    """Computes the median of a stack of images 
+        PARAMS:
+            stack (np.array): input array to compute the median of
+            method (str): median computaion method, supports 'iter', 'bootstrap', default=None uses np.median
+            sample_size (int): size of the sample for the iterative and bootstraping method
+            niter (int): max iter for iterative method
+            progress (bool): prints a progress bar
+        RETURNS: 
+            median_image (np.array): median of the input array
+    """
+
     print("Computing median image with method: {}...".format(method), end='\n')
 
     stack_len = stack.shape[0]
@@ -55,13 +98,15 @@ def median_image(stack, method=None, sample_size=100, niter=100, progress=True):
     return median
 
 
-def normalize_stack(stack, progress=True):
+def normalize_stack(stack, progress=False):
     """Normalizes stack slice by slice inplace operation
-    IN:
-        'stack': numpy array to be normalized along axis 0 (dtype=float32)
-    OUT:
-        'stack' (normalized): numpy array (dtype=float32)
+        PARAMS:
+            stack (np.array): numpy array to be normalized along axis 0 (dtype=float32)
+            progress (bool): print a progress bar if true
+        RETURNS:
+            stack (np.array): normalized array (dtype=float32)
     """
+
     print("Normalizing stack...", end='\n')
 
     if progress: print("\r{}".format(progress_bar(0, stack.shape[0])), end='')
@@ -76,7 +121,7 @@ def normalize_stack(stack, progress=True):
 
 
 def image_correction(image, save_as=None):
-    """Return normalized median substracted image"""
+    """Compputes the median of the input stack, then substracts it and normalize to [0,1]"""
 
     # Makes sure that we will not be overflow errors
     assert image.min() >= 0 and image.max() <= 2**15 -1, "min:{}, max:{}".format(image.min(), image.max())
@@ -172,10 +217,17 @@ def temporal_denoising(stack, method='mean', window_size=5, progress=True):
 
 
 def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='horizontal', progress=True, *args, **kwargs):
-    """Frequency filtering of the image with FFT"""
+    """Frequency filtering of the image with FFT
+        PARAMS:
+            stack, min_size, max_size, keep_mean=True, remove_stripes='horizontal', progress=True
+        RETURNS:
+            filt_stack (np.array): fitered stack
+            
+        TODO: temporal (3D) FFT"""
 
     def circular_mask(size, radius, smooth=True,  sigma=40, center=None):
         """Creates a circle in the middle of an image"""
+
         mask = np.zeros(size)
         if center is None:
             center = (size[0]//2, size[1]//2)
@@ -184,10 +236,11 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
         mask[dist <= radius] = 1
         
         if smooth:
-            mask = gaussian_filter(mask, (radius)/5, mode='nearest')
+            mask = ndimage.gaussian_filter(mask, (radius)/5, mode='nearest')
         return mask
 
     def gaussian_kernel(size, sigma):
+        """Build a gaussian kernel of shape (size, size) and standard dev sigma"""
 
         x, y = np.meshgrid(np.arange(-size[0]//2, size[0]//2), np.arange(-size[1]//2, size[1]//2))
         gaussian = 1 /(np.sqrt(2*np.pi) *sigma) *np.exp(-1/(2*sigma**2) *(x**2 + y**2) )
@@ -195,6 +248,7 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
 
     def center_fft(im_fft):
         """Rearanges the quadrant of the fft or the filters so that the zero frequency is in the middle"""
+
         H, W = im_fft.shape
         centered_fft = np.empty_like(im_fft)
         centered_fft[0:H//2,0:W//2] = im_fft[-H//2:,-W//2:]
@@ -262,36 +316,9 @@ def bright_field_segmentation(image_stack, debug=False):
             mask (np.array): stack of maskw where the cells were detected
     """
 
-    # def stack_thresholding(image_stack, method='triangle', thr_range=10):
-    #     """Thresholding of image stack with given method"""
-    #     if method == 'minimum':
-    #         threshold_method = threshold_minimum
-    #     elif method == 'mean':
-    #         threshold_method = np.mean
-    #     else:
-    #         print("Using default triangle method")
-    #         threshold_method = threshold_triangle
-
-    #     thresholded_stack = np.empty(image_stack.shape, dtype=np.uint8)
-    #     for i in range(0, image_stack.shape[0], thr_range):
-    #         try:
-    #             thresholded_stack[i:i+thr_range] = image_stack[i:i+thr_range] > threshold_method(image_stack[i:i+thr_range])
-    #         except RuntimeError as e:
-    #             if str(e) == "Unable to find two maxima in histogram":
-    #                 #Uses a threshold that always works (more noisy though)
-    #                 # thresholded_stack[i:i+thr_range] = image_stack[i:i+thr_range] > threshold_triangle(image_stack[i:i+thr_range])
-    #                 #Sets to False when there is no valid threshold
-    #                 thresholded_stack[i:i+thr_range] = False
-    #             else:
-    #                 raise RuntimeError(str(e))
-
-    #         print("\rThresholding... {:.0f}%".format((i+thr_range) /image_stack.shape[0] *100), end=' '*10) \
-    #             if i < image_stack.shape[0]-thr_range else print("\rThresholding... Done!")
-
-    #     return thresholded_stack
-
     def struct_3D(t, x, y, shape='cube'):
         """Creates a 3D cross mask for binary morphology"""
+
         if shape == 'cube':
             mask = np.ones((t,x,y))
         elif shape == 'cross':
@@ -317,7 +344,6 @@ def bright_field_segmentation(image_stack, debug=False):
     mask = morphology.binary_closing((mask > 1.35).astype('uint8'), structure=np.ones((3, 10,10)))
     mask = morphology.binary_opening(mask, structure=np.ones((1, 5,5)))
 
-
     if debug:
         fig, axes = plt.subplots(1, 2, num=1, figsize=(10, 5))
         tifffile.imshow(image_stack, cmap='gray', figure=fig, subplot=axes.ravel()[0])
@@ -329,8 +355,36 @@ def bright_field_segmentation(image_stack, debug=False):
     return mask.astype('uint8')
 
 
-def coregister(stack, translation, rotation):
-    return mask
+def coregister(stack, pixel_ratio=1.38, translation=np.zeros((3,)), rotation_angle=0.0):
+    """Coregisters the BF image to ISCAT pixel space, translation and rotation (fixed pixel_size_ratio)
+        PARAMS:
+            stack (np.array): input array
+            pixel_ratio (float): ratio of the pixel size for the zoom of the image
+            translation (np.array): 1 by n_dim array with the amount of pixels by which to shift
+            rotation_angle (float): angle (in radians) by which the array will be rotated (clockwise)     
+        RETURNS:
+            coreg_stack (np.array): transformed stack
+    """
+
+
+    print("Coregistering...")
+    
+    # pixsize_BF -> pix_size_ISCAT (changes array's shape)
+    coreg_stack = ndimage.zoom(stack, (1, pixel_ratio, pixel_ratio), order=1, mode='nearest')
+
+    if rotation_angle == 0 and (translation == 0.0).all():
+
+        crop_ind = (coreg_stack.shape[1] -512) //2
+        return coreg_stack[:,crop_ind:crop_ind+512,crop_ind:crop_ind+512]
+    else:
+
+        # affine_trans from ISCAT coord -> BF
+        coreg_stack = ndimage.rotate(coreg_stack, rotation_angle *(360 /(2*np.pi)), axes=(1,2), reshape=False)
+        # coreg_stack = ndimage.shift(coreg_stack, translation)
+        crop_ind = (coreg_stack.shape[1] -512) //2
+        coreg_stack = coreg_stack[:,crop_ind:crop_ind+512,crop_ind:crop_ind+512]
+
+    return coreg_stack
 
 
 
