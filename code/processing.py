@@ -2,11 +2,13 @@ import os
 import pickle
 import warnings
 
+import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import skimage
 import skimage.io
 import skimage.external.tifffile as tifffile
+from skimage.morphology import skeletonize
 import scipy.ndimage as ndimage
 import scipy.ndimage.morphology as morphology
 from scipy import fftpack
@@ -52,7 +54,7 @@ def structural_element(shape, size):
     return np.stack([element] *size[0], axis=0)
 
 
-def median_image(stack, method=None, sample_size=100, niter=100, progress=False):
+def median_image(stack, method=None, progress=False, **kwargs):
     """Computes the median of a stack of images 
         PARAMS:
             stack (np.array): input array to compute the median of
@@ -60,9 +62,14 @@ def median_image(stack, method=None, sample_size=100, niter=100, progress=False)
             sample_size (int): size of the sample for the iterative and bootstraping method
             niter (int): max iter for iterative method
             progress (bool): prints a progress bar
+
         RETURNS: 
             median_image (np.array): median of the input array
     """
+
+    # Defaults parameters for median computation
+    niter = kwargs['niter'] if 'niter' in kwargs.keys() else 100
+    sample_size = kwargs['sample_size'] if 'sample_size' in kwargs.keys() else 40
 
     print("Computing median image with method: {}...".format(method), end='\n')
 
@@ -98,7 +105,7 @@ def median_image(stack, method=None, sample_size=100, niter=100, progress=False)
     return median
 
 
-def normalize_stack(stack, progress=False):
+def normalize_stack(stack):
     """Normalizes stack slice by slice inplace operation
         PARAMS:
             stack (np.array): numpy array to be normalized along axis 0 (dtype=float32)
@@ -109,22 +116,20 @@ def normalize_stack(stack, progress=False):
 
     print("Normalizing stack...", end='\n')
 
-    if progress: print("\r{}".format(progress_bar(0, stack.shape[0])), end='')
-
     for i in range(stack.shape[0]):
         # Rescales stack to [0, 1]
-        stack[i] += np.abs(stack[i].min()) if stack[i].min() < 0 else 0
-        stack[i] /= np.abs(stack[i]).max()
-        if progress: print("\r{}".format(progress_bar(i+1, stack.shape[0])), end='')
+        stack[i] -= stack[i].min()
+        stack[i] /= np.abs(stack[i].max())
         
     return stack
 
 
-def image_correction(image, save_as=None):
-    """Compputes the median of the input stack, then substracts it and normalize to [0,1]"""
+def image_correction(image):
+    """Computes the median of the input stack, then substracts it and normalize to [0,1]"""
 
     # Makes sure that we will not be overflow errors
     assert image.min() >= 0 and image.max() <= 2**15 -1, "min:{}, max:{}".format(image.min(), image.max())
+    # Cast to signedint for substraction
     image = image.astype('int16')
 
     median_img = median_image(image, 'bootstrap', sample_size=40, niter=20)
@@ -133,17 +138,24 @@ def image_correction(image, save_as=None):
     image -= median_img
     image = normalize_stack(image.astype('float32'))
 
-    if save_as is None:
-        return image
-    else:
-        raise NotImplementedError
-        utilities.save_stack(image, how=save_as, filename=filename[:-4]+'_corr')
+    return image
 
 
-def enhance_contrast(stack, method='stretching', progress=True, **kwargs):
-    """Enhaces image contrast defaults to contrast stretching with percentile = (2, 98)"""
+def enhance_contrast(stack, method='stretching', axis=0, progress=True, **kwargs):
+    """Enhaces contrast of image stack slice by slice, defaults to contrast stretching with percentile = (2, 98)
+        ARGS:
+            stack (np.array): input image
+            method (str): contrast enhancement method in ['stretching', 'hist-equal', 'adapt-hist-equal']
+            axis (int): time axis of the stack along which to iterate
+            progress (bool): show progress as a progress bar
+        KWARGS:
+            percentile (tuple(int)): for 'stretching' saturation percentile of the stack
+        
+        RETURNS:
+            contrast_img (np.array): contrast enhanced stack
+            """
 
-    def enhance_contrast_img(image, method=method, percentile=(2, 98), clip_limit=0.009, **kwargs):
+    def enhance_frame_contrast(image, method=method, percentile=(2, 98), clip_limit=0.009, **kwargs):
         """TODO: stacks with none dim would be easier"""
 
         if method == 'stretching':
@@ -152,11 +164,15 @@ def enhance_contrast(stack, method='stretching', progress=True, **kwargs):
             return contrast_img
 
         elif method == 'hist-equal':
+            if image.min() < 0 or image.max() > 1:
+                contrast_image = (image -image.min()).astype('float32')
+                contrast_image /= contrast_image.max()
+
             contrast_img = exposure.equalize_hist(image)
             return contrast_img
 
         elif method == 'adapt-hist-equal':
-            """TODO: FIX THIS !"""
+            """TODO: FIX THIS! or don't, takes too long anyway :p"""
             raise NotImplementedError
             image[image == 0] = np.finfo(np.float32).eps
             contrast_img = exposure.equalize_adapthist(image, clip_limit)
@@ -167,77 +183,79 @@ def enhance_contrast(stack, method='stretching', progress=True, **kwargs):
 
 
     print("Enhancing contrast with method: {}".format(method))
-    #Contrast enhancment for stacks
-    if len(stack.shape) == 3:
 
+    #Contrast enhancement for stacks
+    if len(stack.shape) == 3:
         contrast_stack = np.empty_like(stack)
+
         if progress: print("\r{}".format(progress_bar(0, stack.shape[0])), end='')
 
         if method == 'stretching':
-            for i in range(stack.shape[0]):
-                contrast_stack[i] = enhance_contrast_img(stack[i], method, **kwargs)
-                if progress: print("\r{}".format(progress_bar(i+1, stack.shape[0])), end='')
+            slc = [slice(None)] *len(stack.shape)
+            
+            for i in range(stack.shape[axis]):
+                slc[axis] = slice(i, i+1, 1)
+                contrast_stack[slc] = enhance_frame_contrast(stack[slc], method, **kwargs)
+                if progress: print("\r{}".format(progress_bar(i+1, stack.shape[axis])), end='')
 
         else:
             # Conversion to float image
             if stack.min() < 0 or stack.max() > 1:
                 contrast_stack = stack.astype('float32') -stack.min()
                 contrast_stack /= contrast_stack.max()
+
             else:
                 contrast_stack = stack.astype('float32')
 
-            for i in range(stack.shape[0]):
-                contrast_stack[i] = enhance_contrast_img(contrast_stack[i], method, **kwargs)
+            for i in range(stack.shape[axis]):
+                contrast_stack[i] = enhance_frame_contrast(contrast_stack[i], method, **kwargs)
                 if progress: print("\r{}".format(progress_bar(i+1, stack.shape[0])), end='')
             
     # Contrast enhancment for single images
     elif len(stack.shape) == 2:
-        contrast_stack = enhance_contrast_img(stack, method, **kwargs)
+        contrast_stack = enhance_frame_contrast(stack, method, **kwargs)
 
     return contrast_stack
 
 
 def temporal_denoising(stack, method='mean', window_size=5, progress=True):
+    """Denoising method with mean and median temporal filters"""
 
     temporal_denoise = np.empty(stack[window_size-1:,...].shape, dtype=np.uint16)
     print("Temporal denoising...")
     if progress: print("\r{}".format(progress_bar(0, stack.shape[0])), end='')
+
     if method == 'mean':
         for i in range(stack.shape[0]-window_size-1):
             temporal_denoise[i] = stack[i:i+window_size].mean(axis=0).astype(np.uint16)
             if progress: print("\r{}".format(progress_bar(i+1, stack.shape[0]-window_size-1)), end='')
         return temporal_denoise
+
     elif method == 'median':
         for i in range(stack.shape[0]-window_size-1):
             temporal_denoise[i] = np.median(stack[i:i+window_size], axis=0).astype(np.uint16)
             if progress: print("\r{}".format(progress_bar(i+1, stack.shape[0]-window_size-1)), end='')
         return temporal_denoise
+
     else:
         raise NotImplementedError
 
 
 def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='horizontal', progress=True, *args, **kwargs):
     """Frequency filtering of the image with FFT
-        PARAMS:
-            stack, min_size, max_size, keep_mean=True, remove_stripes='horizontal', progress=True
-        RETURNS:
-            filt_stack (np.array): fitered stack
+            PARAMS:
+                stack (np.array): input image stack
+                min_size (int): min size of features for high pass
+                max_size (int): max size of features for low pass
+                keep_mean (bool): keeps the mean value of the image (zero frequency component)
+                remove_stripes (str): gaussian stripe to remove high frequency in x or y direction, string conaining either 'horizontal' or 'vertical' or both
+                progress (bool): displays progress bar in terminal
+                
+            RETURNS:
+                filt_stack (np.array): fitered stack
             
-        TODO: temporal (3D) FFT"""
-
-    def circular_mask(size, radius, smooth=True,  sigma=40, center=None):
-        """Creates a circle in the middle of an image"""
-
-        mask = np.zeros(size)
-        if center is None:
-            center = (size[0]//2, size[1]//2)
-        X, Y = np.ogrid[:size[0], :size[1]]
-        dist = np.sqrt((X-center[0])**2 + (Y-center[1])**2)
-        mask[dist <= radius] = 1
-        
-        if smooth:
-            mask = ndimage.gaussian_filter(mask, (radius)/5, mode='nearest')
-        return mask
+        TODO: temporal (3D) FFT
+    """
 
     def gaussian_kernel(size, sigma):
         """Build a gaussian kernel of shape (size, size) and standard dev sigma"""
@@ -246,8 +264,9 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
         gaussian = 1 /(np.sqrt(2*np.pi) *sigma) *np.exp(-1/(2*sigma**2) *(x**2 + y**2) )
         return gaussian /gaussian.max()
 
+
     def center_fft(im_fft):
-        """Rearanges the quadrant of the fft or the filters so that the zero frequency is in the middle"""
+        """Rearanges the quadrant of the fft or the filters so that the zero frequency is in the middlen instead of [0,0]"""
 
         H, W = im_fft.shape
         centered_fft = np.empty_like(im_fft)
@@ -258,7 +277,7 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
         return centered_fft
 
 
-    print("Filtering structure (small, large) = ({}, {}) [px]".format(min_size, max_size))
+    print(f"Filtering structure {min_size} < _ < {max_size} [px]")
 
     # Computes fourier domain frequencies from min/max sizes of allowed structuring elements
     f_low, f_high = (stack.shape[1]/2)/max_size, (stack.shape[1]/2)/min_size
@@ -270,8 +289,7 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
     if remove_stripes is not None:
         width = 5
         x = np.stack([np.arange(-(width//2), width//2 +1)] *stack.shape[-1], axis=-1)
-        gauss_1d = np.exp(-0.5 *np.abs(x)**2 *2**2)
-        # Currently sets lowest freq to 0
+        gauss_1d = np.exp(-0.5 *np.abs(x)**2 *2 **2)
         gauss_1d /= gauss_1d.max()
 
         if 'horizontal' in remove_stripes:
@@ -288,69 +306,63 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
     filt_stack = np.zeros(stack.shape)
 
     for i in range(stack.shape[0]):
-        im_fft = fftpack.fft2(stack[i])
-        filt_fft = im_fft *fft_filter
+        stack_fft = fftpack.fft2(stack[i])
+        filt_fft = stack_fft *fft_filter
         filt_stack[i] = fftpack.ifft2(filt_fft).real
         if progress: print("\r{}".format(progress_bar(i+1, stack.shape[0])), end='')
 
     return filt_stack
 
 
-def time_pooling(stack):
-
-    win_size = 5
-    stack_pool = np.zeros((stack.shape[0] -win_size, stack.shape[1], stack.shape[2]))
-    for i in range(stack.shape[0] -win_size):
-        print("\rimage: {}".format(i), end='')
-        stack_pool[i] = stack[i:i+win_size].min(axis=0)
-
-    return stack_pool
-
-
-def bright_field_segmentation(image_stack, debug=False):
+def bright_field_segmentation(stack, debug=False):
     """Segments cells out of bright field microscopy images
         PARAMS:
-            image_stack (np.array): 
+            stack (np.array): 
             debug (bool): True if diagnostics plots are needed
         RETURNS:
             mask (np.array): stack of maskw where the cells were detected
     """
 
-    def struct_3D(t, x, y, shape='cube'):
-        """Creates a 3D cross mask for binary morphology"""
-
-        if shape == 'cube':
-            mask = np.ones((t,x,y))
-        elif shape == 'cross':
-            mask = np.zeros((t, x, y))
-            mask[t //2],  mask[x //2], mask[t //2] = 1, 1, 1
-        else:
-            print("Used cube as default structuring element")
-            mask = struct_3D(t, x, y, shape='cube')
-        return mask
-
-
-    image_stack = enhance_contrast(image_stack, 'hist-equal')
+    stack = enhance_contrast(stack, 'hist-equal')
 
     # Gradient computation and gaussian filtering
-    mask = np.zeros_like(image_stack)
-    for i in range(image_stack.shape[0]):
-        mask[i] = skimage.filters.sobel(image_stack[i]) 
-        mask[i] = ndimage.gaussian_filter(mask[i], 1.25)
+    mask = np.empty_like(stack)
+    for i in range(stack.shape[0]):
+        mask[i] = ndimage.gaussian_filter(mask[i], 1.5)
+        mask[i] = skimage.filters.sobel(stack[i]) 
 
     # Morphology
     print("Morphology...")
-    mask = morphology.grey_dilation(mask, structure=np.ones((2, 1,1)))
-    mask = morphology.binary_closing((mask > 1.35).astype('uint8'), structure=np.ones((3, 10,10)))
-    mask = morphology.binary_opening(mask, structure=np.ones((1, 5,5)))
+    # mask = morphology.grey_erosion(mask, structure=np.ones((2, 1,1)))
+    print(mask.min(), mask.max())
+    mask = morphology.binary_closing((mask < 20 /255).astype('uint8'), structure=np.ones((2, 2,2)))
+    mask = morphology.binary_erosion(mask, structure=structural_element('circle', (2,5,5)))
+    mask = morphology.binary_opening(mask, structure=structural_element('circle', (2,5,5)))
+    mask = morphology.binary_closing(mask, structure=structural_element('circle', (3,10,10)))
+    # mask = morphology.binary_closing((mask > 1.35).astype('uint8'), structure=structural_element('square', (3, 10, 10)))
+    # mask = morphology.binary_opening(mask, structure=np.ones((1, 5,5)))
 
+
+
+    # stack = enhance_contrast(stack, 'hist-equal')
+
+    # # Gradient computation and gaussian filtering
+    # mask = np.zeros_like(stack)
+    # for i in range(stack.shape[0]):
+    #     mask[i] = skimage.filters.sobel(stack[i]) 
+    #     mask[i] = ndimage.gaussian_filter(mask[i], 1.5)
+    
+    # # Morphology
+    # print("Morphology...")
+    # mask = morphology.binary_dilation(mask < 0.01, structure=structural_element('circle', (3,10,10)))
+    # mask = morphology.binary_closing(mask, structure=structural_element('cross', (3,13,13)))
+    # mask = morphology.binary_opening(mask, structure=structural_element('circle', (1,15,15)))
+    
+    imageio.mimsave('stack.gif', np.concatenate([(stack *255).astype('uint8'), ((mask) *255).astype('uint8')], axis=-1))
+    raise KeyboardInterrupt
+    
     if debug:
-        fig, axes = plt.subplots(1, 2, num=1, figsize=(10, 5))
-        tifffile.imshow(image_stack, cmap='gray', figure=fig, subplot=axes.ravel()[0])
-        axes.ravel()[0].set_title("Original Image")
-        tifffile.imshow(mask, cmap='gray', figure=fig, subplot=axes.ravel()[1])
-        axes.ravel()[1].set_title("Bacteria Detection")
-        plt.show()
+        imageio.mimsave('brigth_field_seg.gif', np.concatenate([(stack *255).astype('uint8'), ((mask) *255).astype('uint8')], axis=-1))
 
     return mask.astype('uint8')
 
@@ -369,15 +381,14 @@ def coregister(stack, pixel_ratio=1.38, translation=np.zeros((3,)), rotation_ang
 
     print("Coregistering...")
     
-    # pixsize_BF -> pix_size_ISCAT (changes array's shape)
+    # pix_size_BF -> pix_size_ISCAT (changes array's shape)
     coreg_stack = ndimage.zoom(stack, (1, pixel_ratio, pixel_ratio), order=1, mode='nearest')
 
-    if rotation_angle == 0 and (translation == 0.0).all():
-
+    if rotation_angle == 0.0 and (translation == 0.0).all():
         crop_ind = (coreg_stack.shape[1] -512) //2
         return coreg_stack[:,crop_ind:crop_ind+512,crop_ind:crop_ind+512]
-    else:
 
+    else:
         # affine_trans from ISCAT coord -> BF
         coreg_stack = ndimage.rotate(coreg_stack, rotation_angle *(360 /(2*np.pi)), axes=(1,2), reshape=False)
         # coreg_stack = ndimage.shift(coreg_stack, translation)
