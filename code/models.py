@@ -333,11 +333,8 @@ class UNetPili(UNet):
         x = self.up_conv3(x, conv2)
         x = self.up_conv4(x, conv1)
         x = self.out_conv(x)
-
-        if not self.training:
-            x = torch.sigmoid(x)
-        else:
-            x = torch.sigmoid(x)
+       
+        x = torch.sigmoid(x)
 
         return x
 

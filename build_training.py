@@ -17,8 +17,7 @@ import skimage.external.tifffile as tifffile
 from skimage.draw import line_aa
 import torch
 
-import code.processing as processing
-import code.utilities as utilities
+from code import utilities, processing
 from code.models import UNetCell
 
 

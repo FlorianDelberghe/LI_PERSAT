@@ -1,4 +1,3 @@
-
 import glob
 import os
 import pickle
@@ -25,7 +24,6 @@ from skimage.filters import threshold_minimum, threshold_triangle
 from skimage.morphology import skeletonize
 from skimage.transform import hough_line, hough_line_peaks
 
-import warnings
 from code import data_loader, models, processing, utilities
 import build_training
 from code.data_loader import DataLoader
@@ -217,8 +215,16 @@ def main():
         print("No CUDA device found")
         sys.exit(1)    
 
-    # test_cell_detection()
-    test_pili_detection()
+    if len(sys.argv) > 1:
+        
+        if str(sys.argv[1]) == 'cell':
+           test_cell_detection(net_path)
+            
+        if str(sys.argv[1]) == 'pili':
+            test_pili_detection(net_path)
+    else:
+        print("Missing argument, which network to train")
+    
 
 
 if __name__ == '__main__':

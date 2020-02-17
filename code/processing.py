@@ -15,7 +15,7 @@ from scipy import fftpack
 from skimage import exposure
 
 import code.utilities as utilities
-from  code.utilities import progress_bar, save_stack
+from  code.utilities import progress_bar
 
 # Some conv function from scipy/skimage output FutureWarnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -253,8 +253,6 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
                 
             RETURNS:
                 filt_stack (np.array): fitered stack
-            
-        TODO: temporal (3D) FFT
     """
 
     def gaussian_kernel(size, sigma):
@@ -304,7 +302,8 @@ def fft_filtering(stack, min_size, max_size, keep_mean=True, remove_stripes='hor
         fft_filter[0, 0] = 1
 
     filt_stack = np.zeros(stack.shape)
-
+    
+    # GPU processing ?
     for i in range(stack.shape[0]):
         stack_fft = fftpack.fft2(stack[i])
         filt_fft = stack_fft *fft_filter
@@ -396,50 +395,3 @@ def coregister(stack, pixel_ratio=1.38, translation=np.zeros((3,)), rotation_ang
         coreg_stack = coreg_stack[:,crop_ind:crop_ind+512,crop_ind:crop_ind+512]
 
     return coreg_stack
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
