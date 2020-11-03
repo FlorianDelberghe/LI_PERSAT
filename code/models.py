@@ -13,6 +13,7 @@ import torch.optim as optim
 from torch import nn
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import StepLR
+import torchvision.transforms
 
 
 class DoubleConv(nn.Module):

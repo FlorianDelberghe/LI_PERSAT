@@ -173,8 +173,8 @@ class DataLoader():
             img /= img.max()
 
         # Gaussian blur on the images (mask) gives better perf as training target
-        if soften and (img != 0).any():
-            img = ndimage.gaussian_filter(img, (0,2,2))
-            img /= img.max()
+        # if soften and (img != 0).any():
+        img = ndimage.gaussian_filter(img, (0,2,2))
+        img /= img.max()
 
         return img

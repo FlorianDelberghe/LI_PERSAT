@@ -5,6 +5,7 @@ import re
 
 import numpy as np
 import skimage.external.tifffile as tifffile
+import cv2
 
 
 def progress_bar(pos, total, length=50, newline=True):
@@ -58,61 +59,6 @@ def load_imgs(imgs_paths):
     return images
 
 
-# def save_stack(stack, how='pickle', filename='temp', out_dir='outputs', **kwargs):
-#     """Saves stacks of images
-#         PARAMS:
-#             stack (np.array):
-#             how (str)
-#             filename (str)
-#             out_dir (str)
-#     """
-
-#     def rescale(stack, bit_depth=16):
-
-#         assert bit_depth in [8, 16], "Wrong value for bit_depth: {}".format(bit_depth)
-
-#         # Rescales to [0, 1]
-#         stack = stack.astype('float32')
-#         stack -= stack.min()
-#         stack /= stack.max()
-
-#         # Rescales to [0, 2**bit_depth -1] (uint8 or int16)
-#         if bit_depth == 8:
-#             stack *= (2**bit_depth -1)
-#         else: 
-#             stack *= (2**(bit_depth-1) -1)
-
-#         return stack.astype('uint{:d}'.format(bit_depth))
-
-#     def save2png(stack, axis=0, one_in_x=10, fileprefix='', out_dir=''):
-#         """Saves stack to multiple png images for training"""
-#         slc = [slice(None)] *len(stack.shape)
-#         for i in range(0, stack.shape[axis], one_in_x):            
-#             slc[axis] = slice(i, i+1)
-#             print("\rSaving: {}_{}.png".format(fileprefix, i+1), end=' '*10)
-#             tifffile.imsave(os.path.join(out_dir, "{}_{}.png".format(fileprefix, i+1)), rescale(stack[slc], 8))
-
-#     try:
-#         os.makedirs(out_dir, exist_ok=True)
-#     except:
-#         print("Could not create dir: '{}'".format(out_dir))
-#         raise 
-
-#     if how == 'pickle':
-#         print("Saving image as {}.pkl".format(filename))
-#         pickle.dump(stack, open(os.path.join(out_dir, '{}.pkl'.format(filename)), 'wb'))
-
-#     elif how.lower() in ['tiff', 'tif']:
-#         print("Saving image as {}.tif".format(filename))
-#         tifffile.imsave(os.path.join(out_dir, '{}.tif'.format(filename)), rescale(stack, 16))
-
-#     elif how == 'png':
-#         save2png(stack, fileprefix=filename, out_dir=out_dir, **kwargs)
-
-#     else:
-#         raise NotImplementedError
-
-
 def load_data_paths(dataset, 
                     pattern='/cam1/event[0-9]_tirf/*PreNbin*.tif',
                     file_mnt="mnt/plabNAS/"):
@@ -142,3 +88,135 @@ def load_data_paths(dataset,
     files = [item for sublist in files for item in sublist]
 
     return files
+
+
+def cell_mask_from_segmentation(filepath):
+
+    def parse_cell_loc(filepath):
+        """Parses ImageJ macro's output files for cell's location
+            ARGS:
+                filepath (str): filepath to the cell segmentation
+            RETURN:
+                cell_loc (dict): contains slices as keys and list of lists of cell contour coordinates as values, first key is images dimensions
+        """
+        cell_loc = {}
+        with open(filepath, 'rt') as f:
+            for line in f:
+                
+                if line.strip().startswith('Image dims'):
+                    cell_loc['image_dims'] = tuple(map(int, line.strip().split('\t')[1:]))
+
+                if line.strip().startswith('Slice'):
+                    current_slice = int(line.strip().split()[1])
+                    cell_loc[current_slice] = [[], []]
+                    line = next(f)
+
+                if line.startswith('Cell'):
+                    cell_loc[current_slice][0].append(list(map(lambda x: int(float(x))-1, (next(f).strip().split(', ')))))
+                    cell_loc[current_slice][1].append(list(map(lambda x: int(float(x))-1, (next(f).strip().split(', ')))))
+
+        return cell_loc
+
+    def build_cell_mask(cell_loc):
+        """Returns a stack of the cells's positions in a mask stack with the same dimensions as the original image
+            ARGS:
+                cell_loc (dict): dictionary of the contours coordinates of the cell as returned by parse_cell_loc()
+            RETURNS:
+                mask (np.array): mask array as uint8 true is 255 false is 0
+        """
+        contours = np.zeros(tuple(filter(lambda x: x > 1, cell_loc['image_dims'])), dtype='uint8')
+        contours = np.moveaxis(contours, -1, 0)
+        
+        for key, values in cell_loc.items():
+            if key == 'image_dims': continue
+
+            cells_x, cells_y = values
+            
+            for cell_x, cell_y in zip(cells_x, cells_y):
+                temp_cont = np.zeros(contours.shape[1:3])
+                cv2.drawContours(temp_cont, [np.array([[x, y] for x, y in zip(cell_x, cell_y)])], -1, (255, 255, 255), thickness=cv2.FILLED)
+                contours[key][temp_cont != 0] = 255
+
+        contours = interp_lin(contours)
+
+        return  contours 
+    
+    def interp_lin(stack):
+        """Pixel wise linear time interpolation"""
+        for i in range(0, stack.shape[0]-4, 4):
+            for j in range(1, 4, 1):
+                stack[i+j] = stack[i] *(1 -j/4) + stack[i+4] *(j/4)
+
+        stack[stack <= 255 /2] = 0
+        return stack
+
+    def interp_morpho(stack):
+        """Interpolation of missing data with temporal dilation"""
+        stack = morphology.binary_dilation(stack != 0, structure=processing.structural_element('square', (5,1,1)))
+        stack = morphology.binary_closing(stack != 0, structure=processing.structural_element('circle', (3,3,3)))
+
+        return (stack *255).astype('uint8')
+
+
+    cell_loc = parse_cell_loc(filepath)
+    mask = build_cell_mask(cell_loc)
+
+    return mask
+    
+
+def pili_mask_from_segmentation(filepath):
+    
+    def parse_pili_loc(filepath):
+        """Parses ImageJ macro's output files for pili location
+            ARGS:
+                filepath (str): filepath to the pili segmentation
+            RETURN:
+                pili_loc (dict): contains slices as keys and pili coordinates as values, first key is images dimensions
+        """
+        pili_loc = {}
+        with open(filepath, 'rt') as f:
+            for line in f:
+                
+                if line.strip().startswith('Image dims'):
+                    pili_loc['image_dims'] = tuple(map(int, line.strip().split('\t')[1:]))
+                    continue
+                
+                if line.strip().startswith('Slice'):
+                    current_slice = int(line.strip().split()[1])
+                    pili_loc[current_slice] = [[], []]
+                    pili_loc[current_slice][0].extend(list(map(lambda x: int(float(x))-1, (next(f).strip().split(', ')))))
+                    pili_loc[current_slice][1].extend(list(map(lambda x: int(float(x))-1, (next(f).strip().split(', ')))))
+                 
+        return pili_loc
+
+    def build_pili_mask(pili_loc):
+        """Returns a stack of the pili's positions in a mask stack with the same dimensions as the original image
+            ARGS:
+                pili_loc (dict): dictionary of the coordinates of the pili as returned by parse_pili_loc()
+            RETURNS:
+                mask (np.array): mask array as uint8 true is 255 false is 0
+        """
+        mask = np.zeros(tuple(filter(lambda x: x > 1, pili_loc['image_dims'])), dtype='uint8')
+        mask = np.moveaxis(mask, -1, 0)
+        
+        for key, values in pili_loc.items():
+            if key == 'image_dims': continue
+
+            coords_x, coords_y = values
+            
+            pili_start = [(coords_x[i], coords_y[i]) for i in range(0, len(coords_x), 2)]
+            pili_end = [(coords_x[i+1], coords_y[i+1]) for i in range(0, len(coords_x), 2)]
+
+            tmp_slc = np.zeros(mask.shape[1:3])
+            for start, end in zip(pili_start, pili_end):
+                cv2.line(tmp_slc, start, end, color=(255, 255, 255), thickness=5)
+            mask[key][tmp_slc != 0] = 255
+
+        return  mask 
+
+
+    pili_loc = parse_pili_loc(filepath)
+    mask = build_pili_mask(pili_loc)
+
+    return mask
+

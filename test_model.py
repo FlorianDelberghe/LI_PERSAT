@@ -115,11 +115,11 @@ def test_cell_detection():
     cuda = torch.device('cuda')
 
     unet_tirf = models.UNetCell(1, 1, device=device, name="testing_UNet", bilinear_upsampling=False)
-    unet_tirf.load_state_dict(torch.load('outputs/saved_models/bf_unet.pth'))
+    unet_tirf.load_state_dict(torch.load('saved_models/bf_unet.pth'))
     unet_tirf.eval()
 
     unet_iscat = models.UNetCell(1, 1, device=device, name="testing_UNet")
-    unet_iscat.load_state_dict(torch.load('outputs/saved_models/iscat_unet_augment_before_fluo.pth'))
+    unet_iscat.load_state_dict(torch.load('saved_models/iscat_unet_augment_before_fluo.pth'))
     unet_iscat.eval()
 
     for i, (iscat, tirf) in enumerate(import_test_data()):
@@ -152,11 +152,11 @@ def test_pili_detection():
     cuda = torch.device('cuda')
 
     unet_cell = models.UNetCell(1, 1, device=device, name="testing_UNet")
-    unet_cell.load_state_dict(torch.load('outputs/saved_models/iscat_unet_augment_before_fluo.pth'))
+    unet_cell.load_state_dict(torch.load('saved_models/iscat_unet_augment_before_fluo.pth'))
     unet_cell.eval()
 
     unet_pili = models.UNetPili(1, 1, device=device, name="testing_UNet")
-    unet_pili.load_state_dict(torch.load('outputs/saved_models/pili_unet_augment_16_channels_170.pth'))
+    unet_pili.load_state_dict(torch.load('saved_models/pili_unet_augment_16_channels_170.pth'))
     unet_pili.eval()
 
     for j, (iscat, tirf) in enumerate(import_test_data()):
@@ -218,10 +218,10 @@ def main():
     if len(sys.argv) > 1:
         
         if str(sys.argv[1]) == 'cell':
-           test_cell_detection(net_path)
+           test_cell_detection()
             
         if str(sys.argv[1]) == 'pili':
-            test_pili_detection(net_path)
+            test_pili_detection()
     else:
         print("Missing argument, which network to train")
     

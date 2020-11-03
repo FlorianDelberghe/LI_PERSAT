@@ -238,8 +238,8 @@ def build_iscat_fluo_training(iscat_filepaths, fluo_filepaths):
     """Creates iscat training data and target in data/iscat_seg/[REF_FRAMES / MASKS] for the iSCAT cell segmentation task with fluorent images used as training
     
         ARGS:
-            iscat_filepaths (list(str)): filepaths of all the iSCAT images to input as returned by utilitiues.load_data_paths()
-            fluo_filepaths (list(str)): filepaths of all the fluo images to input as returned by utilitiues.load_data_paths()
+            iscat_filepaths (list(str)): filepaths of all the iSCAT images to input as returned by utilities.load_data_paths()
+            fluo_filepaths (list(str)): filepaths of all the fluo images to input as returned by utilities.load_data_paths()
     """
 
     print("Building iSCAT/fluo dataset...")
@@ -305,13 +305,91 @@ def build_iscat_pili_training(iscat_filepaths, pili_coords_filepaths):
                 imageio.imsave(OUT_PATH +'MASKS/' +"pili_{}_{}.png".format(i+1, j+1), pili[j])
 
 
+def build_hand_segmentation_tirf_testval():
+    """Creates dataset of manually segmented tirf images for validation and testing"""
+
+    OUT_PATH = DATA_PATH+'hand_seg_tirf/'
+    os.makedirs(os.path.join(OUT_PATH, 'REF_FRAMES/'), exist_ok=True)
+    os.makedirs(os.path.join(OUT_PATH, 'MASKS/'), exist_ok=True)
+
+    ROOT_TEST_PATH = "data/hand-segmentation/"    
+    tirf_files = glob.glob(os.path.join(ROOT_TEST_PATH, 'tirf/*.tif'))
+    cell_seg_files = glob.glob(os.path.join(ROOT_TEST_PATH, 'cell_seg/*.txt'))
+
+    tirf_files.sort(); cell_seg_files.sort();
+
+    for i, (tirf, cell_seg) in enumerate(zip(tirf_files, cell_seg_files)):
+        
+        tirf_stack = tifffile.imread(tirf)
+        mask_cell = utilities.cell_mask_from_segmentation(cell_seg)
+
+        tirf_stack = processing.coregister(tirf_stack, 1.38, np.zeros((3,)), 0.0) if tirf_stack.shape[1:] != (512,512) else tirf_stack
+        mask_cell = processing.coregister(mask_cell, 1.38, np.zeros((3,)), 0.0) if mask_cell.shape[1:] != (512,512) else mask_cell
+
+        for j in range(0, tirf_stack.shape[0], 4):
+            print("\rSaving to stack_{}_{}.png".format(i+1, j+1), end=' '*5)                
+            tifffile.imsave(os.path.join(OUT_PATH, 'REF_FRAMES/', "stack_{}_{}.png".format(i+1, j+1)), rescale(tirf_stack[j]))
+            tifffile.imsave(os.path.join(OUT_PATH, 'MASKS/', "mask_{}_{}.png".format(i+1, j+1)), mask_cell[j].astype('uint8'))
+
+        print('')
+
+
+def build_hand_segmentation_iscat_testval():
+    """Creates dataset of manually segmented iSCAT images for validation and testing"""
+
+    OUT_PATH_CELL = DATA_PATH+'hand_seg_iscat_cell/'
+    os.makedirs(os.path.join(OUT_PATH_CELL, 'REF_FRAMES/'), exist_ok=True)
+    os.makedirs(os.path.join(OUT_PATH_CELL, 'MASKS/'), exist_ok=True)
+
+    OUT_PATH_PILI = DATA_PATH+'hand_seg_iscat_pili/'
+    os.makedirs(os.path.join(OUT_PATH_PILI, 'REF_FRAMES/'), exist_ok=True)
+    os.makedirs(os.path.join(OUT_PATH_PILI, 'MASKS/'), exist_ok=True)
+
+    ROOT_TEST_PATH = "data/hand-segmentation/"    
+    iscat_files = glob.glob(os.path.join(ROOT_TEST_PATH, 'iSCAT/*.tif'))
+    cell_seg_files = glob.glob(os.path.join(ROOT_TEST_PATH, 'cell_seg/*.txt'))
+    pili_seg_files = glob.glob(os.path.join(ROOT_TEST_PATH, 'pili_seg/*.txt'))
+
+    iscat_files.sort(); cell_seg_files.sort(); pili_seg_files.sort();
+
+    for i, (iscat, cell_seg, pili_seg) in enumerate(zip(iscat_files,cell_seg_files, pili_seg_files)):
+        
+        # Loading tirf and iSCAT images
+        iscat_stack = tifffile.imread(iscat)
+
+        # iSCAT preprocessing
+        iscat_stack = processing.image_correction(iscat_stack)
+        iscat_stack = processing.enhance_contrast(iscat_stack, 'stretching', percentile=(1, 99))
+        iscat_stack = processing.fft_filtering(iscat_stack, 1, 13, True)
+        iscat_stack = processing.enhance_contrast(iscat_stack, 'stretching', percentile=(3, 97))
+
+        # Loading ground truth masks
+        mask_cell = utilities.cell_mask_from_segmentation(cell_seg)
+        mask_pili = utilities.pili_mask_from_segmentation(pili_seg)
+
+        for j in range(0, iscat_stack.shape[0], 8):
+            print("\rSaving to stack_{}_{}.png".format(i+1, j+1), end=' '*5)                
+            tifffile.imsave(os.path.join(OUT_PATH_CELL, 'REF_FRAMES/', "stack_{}_{}.png".format(i+1, j+1)), rescale(iscat_stack[j]))
+            tifffile.imsave(os.path.join(OUT_PATH_CELL, 'MASKS/', "mask_{}_{}.png".format(i+1, j+1)), mask_cell[j //2].astype('uint8'))
+
+        print('')
+        for j in range(iscat_stack.shape[0]):
+            if not (mask_pili != 0).any(): continue
+
+            print("\rSaving to stack_{}_{}.png".format(i+1, j+1), end=' '*5)                
+            tifffile.imsave(os.path.join(OUT_PATH_PILI, 'REF_FRAMES/', "stack_{}_{}.png".format(i+1, j+1)), rescale(iscat_stack[j]))
+            tifffile.imsave(os.path.join(OUT_PATH_PILI, 'MASKS/', "mask_{}_{}.png".format(i+1, j+1)), mask_pili[j].astype('uint8'))
+
+        print('')
+
+
 def get_experiments_metadata(paths):
     """Returns the metadata of the experiments from the file at the root of the experiment folder
         ARGS:
             paths (list(str)): root paths of the experiments
         RETURNS:
-            metadata (list(dict)): dict with the magnification and fps information of the experiments"""
-
+            metadata (list(dict)): dict with the magnification and fps information of the experiments
+    """
     metadatas = []
     for path in paths:
         metadata = {}
